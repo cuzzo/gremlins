@@ -37,6 +37,7 @@ linters:
       - path: '_test\.go'
         linters:
           - cyclop
+          - goconst
   settings:
     revive:
       severity: warning

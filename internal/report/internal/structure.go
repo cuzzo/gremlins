@@ -19,17 +19,20 @@ package internal
 
 // OutputResult is the data structure for the Gremlins file output format.
 type OutputResult struct {
-	GoModule          string       `json:"go_module"`
-	Files             []OutputFile `json:"files"`
-	TestEfficacy      float64      `json:"test_efficacy"`
-	MutationsCoverage float64      `json:"mutations_coverage"`
-	MutantsTotal      int          `json:"mutants_total"`
-	MutantsKilled     int          `json:"mutants_killed"`
-	MutantsLived      int          `json:"mutants_lived"`
-	MutantsNotViable  int          `json:"mutants_not_viable"`
-	MutantsNotCovered int          `json:"mutants_not_covered"`
-	ElapsedTime       float64      `json:"elapsed_time"`
-	MutatorStatistics MutatorType  `json:"mutator_statistics"`
+	GoModule            string       `json:"go_module"`
+	Files               []OutputFile `json:"files"`
+	TestEfficacy        float64      `json:"test_efficacy"`
+	MutationsCoverage   float64      `json:"mutations_coverage"`
+	MutantsTotal        int          `json:"mutants_total"`
+	MutantsKilled       int          `json:"mutants_killed"`
+	MutantsLived        int          `json:"mutants_lived"`
+	MutantsNotViable    int          `json:"mutants_not_viable"`
+	MutantsNotCovered   int          `json:"mutants_not_covered"`
+	ElapsedTime         float64      `json:"elapsed_time"`
+	MutatorStatistics   MutatorType  `json:"mutator_statistics"`
+	AttributionComplete bool         `json:"attribution_complete"`
+	DisableBail         bool         `json:"disable_bail"`
+	Tests               []string     `json:"tests,omitempty"`
 }
 
 // OutputFile represents a single file in the OutputResult data structure.
@@ -40,10 +43,13 @@ type OutputFile struct {
 
 // Mutation represents a single mutation in the OutputResult data structure.
 type Mutation struct {
-	Type   string `json:"type"`
-	Status string `json:"status"`
-	Line   int    `json:"line"`
-	Column int    `json:"column"`
+	ID             string   `json:"id"`
+	Type           string   `json:"type"`
+	Status         string   `json:"status"`
+	KilledBy       []string `json:"killed_by,omitempty"`
+	TestsCompleted int      `json:"tests_completed,omitempty"`
+	Line           int      `json:"line"`
+	Column         int      `json:"column"`
 }
 
 // MutatorType contains the list of all supported mutator types.

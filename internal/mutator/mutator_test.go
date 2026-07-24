@@ -17,12 +17,45 @@
 package mutator_test
 
 import (
+	"go/token"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/go-gremlins/gremlins/internal/mutator"
 )
+
+func TestID(t *testing.T) {
+	t.Parallel()
+
+	m := &stubMutator{
+		position:   token.Position{Filename: "example.go", Line: 7, Column: 11},
+		mutantType: mutator.ConditionalsNegation,
+	}
+
+	if got, want := mutator.ID(m), "example.go:7:11:CONDITIONALS_NEGATION"; got != want {
+		t.Errorf("ID() = %q, want %q", got, want)
+	}
+}
+
+type stubMutator struct {
+	position   token.Position
+	mutantType mutator.Type
+}
+
+func (m *stubMutator) Type() mutator.Type       { return m.mutantType }
+func (*stubMutator) SetType(mutator.Type)       {}
+func (*stubMutator) Status() mutator.Status     { return mutator.Killed }
+func (*stubMutator) SetStatus(mutator.Status)   {}
+func (m *stubMutator) Position() token.Position { return m.position }
+func (*stubMutator) Pos() token.Pos             { return token.NoPos }
+func (*stubMutator) Pkg() string                { return "example.com" }
+func (*stubMutator) SetWorkdir(string)          {}
+func (*stubMutator) Workdir() string            { return "" }
+func (*stubMutator) Apply() error               { return nil }
+func (*stubMutator) Rollback() error            { return nil }
+func (*stubMutator) OrigSnippet() []byte        { return nil }
+func (*stubMutator) MutatedSnippet() []byte     { return nil }
 
 func TestStatusString(t *testing.T) {
 	testCases := []struct {

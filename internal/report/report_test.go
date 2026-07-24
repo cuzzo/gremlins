@@ -462,9 +462,14 @@ func TestReportToFile(t *testing.T) {
 		stubMutant{status: mutator.Killed, mutantType: mutator.RemoveSelfAssignments, position: newPosition("file3.go", 4, 100)},
 	}
 	data := report.Results{
-		Module:  "example.com/go/module",
-		Mutants: mutants,
-		Elapsed: (2 * time.Minute) + (22 * time.Second) + (123 * time.Millisecond),
+		Module:              "example.com/go/module",
+		Mutants:             mutants,
+		Tests:               []string{"go:example.com:TestOne"},
+		KilledBy:            map[string][]string{"file1.go:10:3:CONDITIONALS_NEGATION": {"go:example.com:TestOne"}},
+		TestsCompleted:      map[string]int{"file1.go:10:3:CONDITIONALS_NEGATION": 3},
+		Elapsed:             (2 * time.Minute) + (22 * time.Second) + (123 * time.Millisecond),
+		AttributionComplete: true,
+		DisableBail:         true,
 	}
 	f, _ := os.ReadFile("testdata/normal_output.json")
 	want := internal.OutputResult{}

@@ -17,7 +17,10 @@
 // Package mutator provides mutation types, statuses, and interfaces for mutation testing.
 package mutator
 
-import "go/token"
+import (
+	"fmt"
+	"go/token"
+)
 
 // Status represents the status of a given TokenMutant.
 //
@@ -175,4 +178,11 @@ type Mutator interface {
 
 	// MutatedSnippet returns the mutated code snippet around the mutation point.
 	MutatedSnippet() []byte
+}
+
+// ID returns a stable identifier for a mutant within a Gremlins run.
+func ID(m Mutator) string {
+	position := m.Position()
+
+	return fmt.Sprintf("%s:%d:%d:%s", position.Filename, position.Line, position.Column, m.Type().String())
 }

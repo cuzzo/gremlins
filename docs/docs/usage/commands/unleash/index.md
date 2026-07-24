@@ -107,6 +107,29 @@ gremlins unleash --diff "origin/$GITHUB_BASE_REF"
 
 Use `actions/checkout@v4` with `fetch-depth: 0` to fetch all history.
 
+### Disable bail
+
+:material-flag: `--disable-bail` · :material-sign-direction: Default: false
+
+Runs every selected test for each mutant instead of stopping after the first
+failure. This follows Stryker's `disableBail` option and is useful when a
+machine-readable report must identify every named test that kills a mutant.
+
+Use it with `--output`:
+
+```shell
+gremlins unleash --disable-bail --output=output.json
+```
+
+Before mutation testing, Gremlins inventories the selected top-level tests and
+emits their stable IDs in `tests`. Each executed mutant reports
+`tests_completed`, following Mutation Testing Elements' `testsCompleted`
+concept. The report sets `attribution_complete` to `true` only when every
+killed or surviving mutant runs every selected top-level test to a terminal
+pass, fail, or skip event, and every killed mutant has at least one named
+failing test. Package failures without a named test, panics, timeouts, and
+interrupted runs therefore leave attribution incomplete.
+
 ### Dry run
 
 :material-flag:`--dry-run`/`-d` · :material-sign-direction: Default: false
@@ -322,16 +345,22 @@ The output file in JSON format and has the following structure:
   //(3)
   "mutants_not_covered": 10,
   "elapsed_time": 123.456,
+  "disable_bail": true,
+  "attribution_complete": true,
+  "tests": ["go:github.com/example/project:TestExample"],
   //(4)
   "files": [
     {
       "file_name": "myFile.go",
       "mutations": [
         {
+          "id": "myFile.go:10:8:CONDITIONALS_NEGATION",
           "line": 10,
           "column": 8,
           "type": "CONDITIONALS_NEGATION",
-          "status": "KILLED"
+          "status": "KILLED",
+          "killed_by": ["go:github.com/example/project:TestExample"],
+          "tests_completed": 42
         }
       ]
     }

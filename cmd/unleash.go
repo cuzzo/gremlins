@@ -51,6 +51,7 @@ const (
 	paramBuildTags          = "tags"
 	paramCoverPackages      = "coverpkg"
 	paramDryRun             = "dry-run"
+	paramDisableBail        = "disable-bail"
 	paramOutputStatuses     = "output-statuses"
 	paramOutputDiffStatuses = "output-diff-statuses"
 	paramOutput             = "output"
@@ -180,6 +181,9 @@ func run(ctx context.Context, mod gomodule.GoModule, workDir string) (report.Res
 	defer wdDealer.Clean()
 
 	jDealer := engine.NewExecutorDealer(mod, wdDealer, cProfile.Elapsed)
+	if err := jDealer.PrepareAttribution(ctx); err != nil {
+		return report.Results{}, err
+	}
 
 	codeData := engine.CodeData{
 		Cov:       cProfile.Profile,
@@ -189,8 +193,42 @@ func run(ctx context.Context, mod gomodule.GoModule, workDir string) (report.Res
 
 	mut := engine.New(mod, codeData, jDealer)
 	results := mut.Run(ctx)
+	attribution := jDealer.Attribution()
+	results.Tests = attribution.Tests
+	results.KilledBy = attribution.KilledBy
+	results.TestsCompleted = attribution.TestsCompleted
+	results.AttributionCompleted = attribution.AttributionCompleted
+	results.DisableBail = configuration.Get[bool](configuration.UnleashDisableBailKey)
+	results.AttributionComplete = attributionComplete(results)
 
 	return results, nil
+}
+
+func attributionComplete(results report.Results) bool {
+	if configuration.Get[bool](configuration.UnleashDryRunKey) ||
+		!results.DisableBail ||
+		configuration.Get[string](configuration.UnleashOutputKey) == "" {
+		return false
+	}
+	for _, mutant := range results.Mutants {
+		switch mutant.Status() {
+		case mutator.Killed:
+			id := mutator.ID(mutant)
+			if len(results.KilledBy[id]) == 0 || !results.AttributionCompleted[id] {
+				return false
+			}
+		case mutator.Lived:
+			if !results.AttributionCompleted[mutator.ID(mutant)] {
+				return false
+			}
+		case mutator.NotCovered, mutator.NotViable, mutator.Skipped:
+			continue
+		case mutator.Runnable, mutator.TimedOut:
+			return false
+		}
+	}
+
+	return true
 }
 
 func setFlagsOnCmd(cmd *cobra.Command) error {
@@ -207,6 +245,7 @@ func setFlagsOnCmd(cmd *cobra.Command) error {
 
 	fls := []*flags.Flag{
 		{Name: paramDryRun, CfgKey: configuration.UnleashDryRunKey, Shorthand: "d", DefaultV: false, Usage: "find mutations but do not executes tests"},
+		{Name: paramDisableBail, CfgKey: configuration.UnleashDisableBailKey, DefaultV: false, Usage: "run every selected test after a mutant is killed and report all named killer tests"},
 		{Name: paramOutputStatuses, CfgKey: configuration.UnleashOutputStatusesKey, Shorthand: "S", DefaultV: "", Usage: "print only statuses from this flag, allowed values - 'lctkvsr'"},
 		{Name: paramOutputDiffStatuses, CfgKey: configuration.UnleashOutputDiffStatusesKey, DefaultV: "", Usage: "print diff for mutants with these statuses, allowed values - 'lk'"},
 		{Name: paramBuildTags, CfgKey: configuration.UnleashTagsKey, Shorthand: "t", DefaultV: "", Usage: "a comma-separated list of build tags"},

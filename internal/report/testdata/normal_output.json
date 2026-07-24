@@ -8,6 +8,9 @@
   "mutants_not_viable": 2,
   "mutants_not_covered": 3,
   "elapsed_time": 142.123,
+  "attribution_complete": true,
+  "disable_bail": true,
+  "tests": ["go:example.com:TestOne"],
   "mutator_statistics": {
     "arithmetic_base": 1,
     "conditionals_negation": 1,
@@ -26,24 +29,30 @@
       "file_name": "file1.go",
       "mutations": [
         {
+          "id": "file1.go:10:3:CONDITIONALS_NEGATION",
           "line": 10,
           "column": 3,
           "type": "CONDITIONALS_NEGATION",
-          "status": "KILLED"
+          "status": "KILLED",
+          "killed_by": ["go:example.com:TestOne"],
+          "tests_completed": 3
         },
         {
+          "id": "file1.go:20:8:ARITHMETIC_BASE",
           "line": 20,
           "column": 8,
           "type": "ARITHMETIC_BASE",
           "status": "LIVED"
         },
         {
+          "id": "file1.go:40:7:INCREMENT_DECREMENT",
           "line": 40,
           "column": 7,
           "type": "INCREMENT_DECREMENT",
           "status": "NOT COVERED"
         },
         {
+          "id": "file1.go:10:8:INVERT_ASSIGNMENTS",
           "line": 10,
           "column": 8,
           "type": "INVERT_ASSIGNMENTS",
@@ -55,36 +64,42 @@
       "file_name": "file2.go",
       "mutations": [
         {
+          "id": "file2.go:20:3:INVERT_LOOPCTRL",
           "line": 20,
           "column": 3,
           "type": "INVERT_LOOPCTRL",
           "status": "NOT COVERED"
         },
         {
+          "id": "file2.go:44:17:INCREMENT_DECREMENT",
           "line": 44,
           "column": 17,
           "type": "INCREMENT_DECREMENT",
           "status": "KILLED"
         },
         {
+          "id": "file2.go:500:3:CONDITIONALS_BOUNDARY",
           "line": 500,
           "column": 3,
           "type": "CONDITIONALS_BOUNDARY",
           "status": "NOT COVERED"
         },
         {
+          "id": "file2.go:100:3:INVERT_BITWISE",
           "line": 100,
           "column": 3,
           "type": "INVERT_BITWISE",
           "status": "LIVED"
         },
         {
+          "id": "file2.go:10:4:INVERT_BWASSIGN",
           "line": 10,
           "column": 4,
           "type": "INVERT_BWASSIGN",
           "status": "KILLED"
         },
         {
+          "id": "file2.go:11:4:INVERT_LOGICAL",
           "line": 11,
           "column": 4,
           "type": "INVERT_LOGICAL",
@@ -96,12 +111,14 @@
       "file_name": "file3.go",
       "mutations": [
         {
+          "id": "file3.go:200:4:INVERT_NEGATIVES",
           "line": 200,
           "column": 4,
           "type": "INVERT_NEGATIVES",
           "status": "NOT VIABLE"
         },
         {
+          "id": "file3.go:100:4:REMOVE_SELF_ASSIGNMENTS",
           "line": 100,
           "column": 4,
           "type": "REMOVE_SELF_ASSIGNMENTS",

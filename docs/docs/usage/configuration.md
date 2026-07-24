@@ -48,6 +48,7 @@ silent: false
 unleash:
   integration: false
   dry-run: false
+  disable-bail: false
   tags: ""
   output: ""
   diff: ""

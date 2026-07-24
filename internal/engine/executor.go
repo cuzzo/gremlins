@@ -17,6 +17,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -38,6 +39,11 @@ import (
 // of each test run.
 const DefaultTimeoutCoefficient = 5
 
+const (
+	goTestSubcommand   = "test"
+	allPackagesPattern = "./..."
+)
+
 // ExecutorDealer is the initializer for new workerpool.Executor.
 type ExecutorDealer interface {
 	NewExecutor(mut mutator.Mutator, outCh chan<- mutator.Mutator, wg *sync.WaitGroup) workerpool.Executor
@@ -52,14 +58,18 @@ type ExecutorDealer interface {
 // rollback. These can be overridden with nop functions in tests. Not an
 // ideal setup. In the future we can think of a better way to handle this.
 type MutantExecutorDealer struct {
-	wdDealer          workdir.Dealer
-	execContext       execContext
-	mod               gomodule.GoModule
-	buildTags         string
-	testExecutionTime time.Duration
-	dryRun            bool
-	integrationMode   bool
-	testCPU           int
+	wdDealer           workdir.Dealer
+	execContext        execContext
+	mod                gomodule.GoModule
+	buildTags          string
+	testExecutionTime  time.Duration
+	dryRun             bool
+	disableBail        bool
+	collectAttribution bool
+	integrationMode    bool
+	testCPU            int
+	attribution        *attributionStore
+	testInventory      map[string]struct{}
 }
 
 // ExecutorDealerOption is the defining option for the initialisation of a ExecutorDealer.
@@ -78,6 +88,12 @@ func WithExecContext(c execContext) ExecutorDealerOption {
 func NewExecutorDealer(mod gomodule.GoModule, wdd workdir.Dealer, elapsed time.Duration, opts ...ExecutorDealerOption) *MutantExecutorDealer {
 	buildTags := configuration.Get[string](configuration.UnleashTagsKey)
 	dryRun := configuration.Get[bool](configuration.UnleashDryRunKey)
+	disableBail := configuration.Get[bool](configuration.UnleashDisableBailKey)
+	collectAttribution := shouldCollectAttribution(
+		dryRun,
+		disableBail,
+		configuration.Get[string](configuration.UnleashOutputKey),
+	)
 	integrationMode := configuration.Get[bool](configuration.UnleashIntegrationMode)
 	testCPU := configuration.Get[int](configuration.UnleashTestCPUKey)
 	tCoefficient := configuration.Get[int](configuration.UnleashTimeoutCoefficientKey)
@@ -99,14 +115,18 @@ func NewExecutorDealer(mod gomodule.GoModule, wdd workdir.Dealer, elapsed time.D
 	}
 
 	jd := MutantExecutorDealer{
-		mod:               mod,
-		wdDealer:          wdd,
-		buildTags:         buildTags,
-		dryRun:            dryRun,
-		integrationMode:   integrationMode,
-		testCPU:           testCPU,
-		testExecutionTime: baseTime * time.Duration(coefficient),
-		execContext:       exec.CommandContext,
+		mod:                mod,
+		wdDealer:           wdd,
+		buildTags:          buildTags,
+		dryRun:             dryRun,
+		disableBail:        disableBail,
+		collectAttribution: collectAttribution,
+		integrationMode:    integrationMode,
+		testCPU:            testCPU,
+		testExecutionTime:  baseTime * time.Duration(coefficient),
+		execContext:        exec.CommandContext,
+		attribution:        newAttributionStore(),
+		testInventory:      make(map[string]struct{}),
 	}
 
 	for _, opt := range opts {
@@ -116,23 +136,31 @@ func NewExecutorDealer(mod gomodule.GoModule, wdd workdir.Dealer, elapsed time.D
 	return &jd
 }
 
+func shouldCollectAttribution(dryRun, disableBail bool, output string) bool {
+	return !dryRun && disableBail && output != ""
+}
+
 // NewExecutor returns a new workerpool.Executor for the given mutator.Mutator.
 // It gets an output channel of mutator.Mutator and a sync.WaitGroup. The channel
 // will stream the results of the executor, and the wait group will be done when the
 // executor is complete.
 func (m MutantExecutorDealer) NewExecutor(mut mutator.Mutator, outCh chan<- mutator.Mutator, wg *sync.WaitGroup) workerpool.Executor {
 	mj := mutantExecutor{
-		mutant:            mut,
-		outCh:             outCh,
-		wg:                wg,
-		wdDealer:          m.wdDealer,
-		module:            m.mod,
-		dryRun:            m.dryRun,
-		integrationMode:   m.integrationMode,
-		buildTags:         m.buildTags,
-		execContext:       m.execContext,
-		testCPU:           m.testCPU,
-		testExecutionTime: m.testExecutionTime,
+		mutant:             mut,
+		outCh:              outCh,
+		wg:                 wg,
+		wdDealer:           m.wdDealer,
+		module:             m.mod,
+		dryRun:             m.dryRun,
+		disableBail:        m.disableBail,
+		collectAttribution: m.collectAttribution,
+		integrationMode:    m.integrationMode,
+		buildTags:          m.buildTags,
+		execContext:        m.execContext,
+		testCPU:            m.testCPU,
+		testExecutionTime:  m.testExecutionTime,
+		attribution:        m.attribution,
+		testInventory:      m.testInventory,
 	}
 
 	return &mj
@@ -141,17 +169,50 @@ func (m MutantExecutorDealer) NewExecutor(mut mutator.Mutator, outCh chan<- muta
 type execContext = func(ctx context.Context, name string, args ...string) *exec.Cmd
 
 type mutantExecutor struct {
-	mutant            mutator.Mutator
-	wdDealer          workdir.Dealer
-	outCh             chan<- mutator.Mutator
-	wg                *sync.WaitGroup
-	execContext       execContext
-	module            gomodule.GoModule
-	buildTags         string
-	testExecutionTime time.Duration
-	dryRun            bool
-	integrationMode   bool
-	testCPU           int
+	mutant             mutator.Mutator
+	wdDealer           workdir.Dealer
+	outCh              chan<- mutator.Mutator
+	wg                 *sync.WaitGroup
+	execContext        execContext
+	module             gomodule.GoModule
+	buildTags          string
+	testExecutionTime  time.Duration
+	dryRun             bool
+	disableBail        bool
+	collectAttribution bool
+	integrationMode    bool
+	testCPU            int
+	attribution        *attributionStore
+	testInventory      map[string]struct{}
+}
+
+// Attribution returns a detached snapshot of the test evidence captured during the run.
+func (m *MutantExecutorDealer) Attribution() Attribution {
+	return buildAttribution(m.testInventory, m.attribution.snapshot())
+}
+
+// PrepareAttribution inventories the tests that must terminate in every complete run.
+func (m *MutantExecutorDealer) PrepareAttribution(ctx context.Context) error {
+	if !m.collectAttribution {
+		return nil
+	}
+
+	cmd := m.execContext(ctx, "go", m.getTestInventoryArgs()...)
+	cmd.Dir = filepath.Join(m.mod.Root, m.mod.CallingDir)
+	cmd.Env = append(cmd.Env, os.Environ()...)
+	cmd.Env = append(cmd.Env, fmt.Sprintf("GOTMPDIR=%s", m.wdDealer.WorkDir()))
+
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	setupProcessGroup(cmd)
+	if err := run(ctx, cmd); err != nil {
+		return fmt.Errorf("inventory Go tests: %w", err)
+	}
+
+	m.testInventory = parseGoTestInventory(output.Bytes())
+
+	return nil
 }
 
 // Start is the implementation of the workerpool.Executor definition and is the
@@ -209,14 +270,38 @@ func (m *mutantExecutor) runTests(rootDir, pkg string) mutator.Status {
 	}
 	cmd.Env = append(cmd.Env, os.Environ()...)
 	cmd.Env = append(cmd.Env, fmt.Sprintf("GOTMPDIR=%s", m.wdDealer.WorkDir()))
+	var output bytes.Buffer
+	if m.collectAttribution {
+		cmd.Stdout = &output
+		cmd.Stderr = &output
+	}
 
 	// Set up process group for killing entire process tree
 	setupProcessGroup(cmd)
 
 	err := run(ctx, cmd)
+	var facts goTestRun
+	if m.collectAttribution {
+		facts = parseGoTestRun(output.Bytes())
+		testsCompleted, complete := testRunProgress(
+			m.testInventory,
+			facts.completed,
+			pkg,
+			m.integrationMode,
+		)
+		m.attribution.record(
+			m.mutant,
+			facts.failed,
+			testsCompleted,
+			complete,
+		)
+	}
 
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return mutator.TimedOut
+	}
+	if facts.failedBuild {
+		return mutator.NotViable
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
@@ -226,8 +311,18 @@ func (m *mutantExecutor) runTests(rootDir, pkg string) mutator.Status {
 	return mutator.Lived
 }
 
+func (m *MutantExecutorDealer) getTestInventoryArgs() []string {
+	args := []string{goTestSubcommand}
+	if m.buildTags != "" {
+		args = append(args, "-tags", m.buildTags)
+	}
+	args = append(args, "-json", "-list", "^(Test|Example|Fuzz)", allPackagesPattern)
+
+	return args
+}
+
 func (m *mutantExecutor) getTestArgs(pkg string) []string {
-	args := []string{"test"}
+	args := []string{goTestSubcommand}
 	if m.buildTags != "" {
 		args = append(args, "-tags", m.buildTags)
 	}
@@ -235,7 +330,12 @@ func (m *mutantExecutor) getTestArgs(pkg string) []string {
 	// timeout and not the test itself. The timeout on the test prevents the test.* processes
 	// from hanging forever.
 	args = append(args, "-timeout", (2*time.Second + m.testExecutionTime).String())
-	args = append(args, "-failfast")
+	if m.collectAttribution {
+		args = append(args, "-json")
+	}
+	if !m.disableBail {
+		args = append(args, "-failfast")
+	}
 
 	if m.testCPU != 0 {
 		args = append(args, "-cpu", fmt.Sprintf("%d", m.testCPU))
@@ -243,7 +343,7 @@ func (m *mutantExecutor) getTestArgs(pkg string) []string {
 
 	path := pkg
 	if m.integrationMode {
-		path = "./..."
+		path = allPackagesPattern
 	}
 	args = append(args, path)
 

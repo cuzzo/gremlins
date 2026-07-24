@@ -19,6 +19,7 @@ package engine_test
 import (
 	"context"
 	"fmt"
+	"go/token"
 	"os"
 	"os/exec"
 	"strings"
@@ -435,11 +436,117 @@ func TestProcessTestsFailure(_ *testing.T) {
 	os.Exit(1) // skipcq: RVV-A0003
 }
 
+func TestProcessNamedFailures(_ *testing.T) {
+	if os.Getenv("GO_TEST_PROCESS") != "1" {
+		return
+	}
+	_, _ = os.Stdout.WriteString(`{"Action":"fail","Package":"example.com/pkg","Test":"TestOne"}` + "\n")
+	_, _ = os.Stdout.WriteString(`{"Action":"fail","Package":"example.com/pkg","Test":"TestTwo/subtest"}` + "\n")
+	_, _ = os.Stdout.WriteString(`{"Action":"fail","Package":"example.com/pkg"}` + "\n")
+	os.Exit(1) // skipcq: RVV-A0003
+}
+
+func TestProcessJSONBuildFailure(_ *testing.T) {
+	if os.Getenv("GO_TEST_PROCESS") != "1" {
+		return
+	}
+	_, _ = os.Stdout.WriteString(
+		`{"Action":"fail","Package":"example.com/pkg","FailedBuild":"example.com/pkg.test"}` + "\n",
+	)
+	os.Exit(1) // skipcq: RVV-A0003
+}
+
 func TestProcessBuildFailure(_ *testing.T) {
 	if os.Getenv("GO_TEST_PROCESS") != "1" {
 		return
 	}
 	os.Exit(2) // skipcq: RVV-A0003
+}
+
+func TestExecutorRecognizesJSONBuildFailure(t *testing.T) {
+	viperSet(map[string]any{
+		configuration.UnleashDisableBailKey: true,
+		configuration.UnleashDryRunKey:      false,
+		configuration.UnleashOutputKey:      "findings.json",
+	})
+	defer viperReset()
+
+	wdDealer := newWdDealerStub(t)
+	mod := gomodule.GoModule{Name: "example.com", Root: ".", CallingDir: "."}
+	dealer := engine.NewExecutorDealer(mod, wdDealer, expectedTimeout,
+		engine.WithExecContext(fakeExecCommandJSONBuildFailure),
+	)
+	mut := &mutantStub{
+		status:  mutator.Runnable,
+		mutType: mutator.ConditionalsBoundary,
+		pkg:     "example.com/pkg",
+		position: token.Position{
+			Filename: "example.go",
+			Line:     12,
+			Column:   4,
+		},
+	}
+	outCh := make(chan mutator.Mutator, 1)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	dealer.NewExecutor(mut, outCh, &wg).Start(&workerpool.Worker{Name: "test", ID: 1})
+	wg.Wait()
+
+	if got := (<-outCh).Status(); got != mutator.NotViable {
+		t.Fatalf("mutation status = %s, want %s", got, mutator.NotViable)
+	}
+}
+
+func TestExecutorReportsEveryNamedKiller(t *testing.T) {
+	viperSet(map[string]any{
+		configuration.UnleashDisableBailKey: true,
+		configuration.UnleashDryRunKey:      false,
+		configuration.UnleashOutputKey:      "findings.json",
+	})
+	defer viperReset()
+
+	wdDealer := newWdDealerStub(t)
+	mod := gomodule.GoModule{Name: "example.com", Root: ".", CallingDir: "."}
+	dealer := engine.NewExecutorDealer(mod, wdDealer, expectedTimeout,
+		engine.WithExecContext(fakeExecCommandNamedFailures),
+	)
+	mut := &mutantStub{
+		status:  mutator.Runnable,
+		mutType: mutator.ConditionalsBoundary,
+		pkg:     "example.com/pkg",
+		position: token.Position{
+			Filename: "example.go",
+			Line:     12,
+			Column:   4,
+		},
+	}
+	outCh := make(chan mutator.Mutator, 1)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	dealer.NewExecutor(mut, outCh, &wg).Start(&workerpool.Worker{Name: "test", ID: 1})
+	wg.Wait()
+
+	gotMutant := <-outCh
+	if gotMutant.Status() != mutator.Killed {
+		t.Fatalf("expected mutation to be killed, got %s", gotMutant.Status())
+	}
+	want := map[string][]string{
+		"example.go:12:4:CONDITIONALS_BOUNDARY": {
+			"go:example.com/pkg:TestOne",
+			"go:example.com/pkg:TestTwo",
+		},
+	}
+	attribution := dealer.Attribution()
+	if diff := cmp.Diff(want, attribution.KilledBy); diff != "" {
+		t.Errorf("killer attribution mismatch (-want +got):\n%s", diff)
+	}
+	id := "example.go:12:4:CONDITIONALS_BOUNDARY"
+	if diff := cmp.Diff(map[string]int{id: 0}, attribution.TestsCompleted); diff != "" {
+		t.Errorf("completed-test counts mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(map[string]bool{id: false}, attribution.AttributionCompleted); diff != "" {
+		t.Errorf("completion state mismatch (-want +got):\n%s", diff)
+	}
 }
 
 func TestMutatorRunInTheCorrectFolder(t *testing.T) {
@@ -573,6 +680,20 @@ func fakeExecCommandWithHolder(got *commandHolder, fakeCmd func(ctx context.Cont
 
 func fakeExecCommandTestsFailure(ctx context.Context, command string, args ...string) *exec.Cmd {
 	cs := []string{"-test.run=TestProcessTestsFailure", "--", command}
+	cs = append(cs, args...)
+
+	return getCmd(ctx, cs)
+}
+
+func fakeExecCommandNamedFailures(ctx context.Context, command string, args ...string) *exec.Cmd {
+	cs := []string{"-test.run=TestProcessNamedFailures", "--", command}
+	cs = append(cs, args...)
+
+	return getCmd(ctx, cs)
+}
+
+func fakeExecCommandJSONBuildFailure(ctx context.Context, command string, args ...string) *exec.Cmd {
+	cs := []string{"-test.run=TestProcessJSONBuildFailure", "--", command}
 	cs = append(cs, args...)
 
 	return getCmd(ctx, cs)

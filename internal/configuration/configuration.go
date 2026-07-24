@@ -35,6 +35,7 @@ import (
 const (
 	GremlinsSilentKey            = "silent"
 	UnleashDryRunKey             = "unleash.dry-run"
+	UnleashDisableBailKey        = "unleash.disable-bail"
 	UnleashOutputStatusesKey     = "unleash.output-statuses"
 	UnleashOutputKey             = "unleash.output"
 	UnleashTagsKey               = "unleash.tags"

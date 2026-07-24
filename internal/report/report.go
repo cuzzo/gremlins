@@ -45,9 +45,15 @@ var (
 // Results contains the list of mutator.Mutator to be reported
 // and the time it took to discover and test them.
 type Results struct {
-	Module  string
-	Mutants []mutator.Mutator
-	Elapsed time.Duration
+	Module               string
+	Mutants              []mutator.Mutator
+	Tests                []string
+	KilledBy             map[string][]string
+	TestsCompleted       map[string]int
+	AttributionCompleted map[string]bool
+	Elapsed              time.Duration
+	AttributionComplete  bool
+	DisableBail          bool
 }
 
 type reportStatus struct {
@@ -66,8 +72,11 @@ type reportStatus struct {
 
 	mutatorStatistics internal.MutatorType
 
-	tEfficacy float64
-	mCovered  float64
+	tEfficacy           float64
+	mCovered            float64
+	attributionComplete bool
+	disableBail         bool
+	tests               []string
 }
 
 func newReport(results Results) (*reportStatus, bool) {
@@ -75,16 +84,23 @@ func newReport(results Results) (*reportStatus, bool) {
 		return nil, false
 	}
 	rep := &reportStatus{
-		module:  results.Module,
-		elapsed: durafmt.Parse(results.Elapsed).LimitFirstN(2),
+		module:              results.Module,
+		elapsed:             durafmt.Parse(results.Elapsed).LimitFirstN(2),
+		attributionComplete: results.AttributionComplete,
+		disableBail:         results.DisableBail,
+		tests:               append([]string(nil), results.Tests...),
 	}
 	rep.files = make(map[string][]internal.Mutation)
 	for _, m := range results.Mutants {
+		id := mutator.ID(m)
 		rep.files[m.Position().Filename] = append(rep.files[m.Position().Filename], internal.Mutation{
-			Line:   m.Position().Line,
-			Column: m.Position().Column,
-			Type:   m.Type().String(),
-			Status: m.Status().String(),
+			ID:             id,
+			Line:           m.Position().Line,
+			Column:         m.Position().Column,
+			Type:           m.Type().String(),
+			Status:         m.Status().String(),
+			KilledBy:       append([]string(nil), results.KilledBy[id]...),
+			TestsCompleted: results.TestsCompleted[id],
 		})
 
 		reportMutationStatus(m, rep)
@@ -173,17 +189,20 @@ func (r *reportStatus) fileReport() {
 		}
 
 		result := internal.OutputResult{
-			GoModule:          r.module,
-			TestEfficacy:      r.tEfficacy,
-			MutationsCoverage: r.mCovered,
-			MutantsTotal:      r.lived + r.killed + r.notViable,
-			MutantsKilled:     r.killed,
-			MutantsLived:      r.lived,
-			MutantsNotViable:  r.notViable,
-			MutantsNotCovered: r.notCovered,
-			ElapsedTime:       r.elapsed.Duration().Seconds(),
-			MutatorStatistics: r.mutatorStatistics,
-			Files:             files,
+			GoModule:            r.module,
+			TestEfficacy:        r.tEfficacy,
+			MutationsCoverage:   r.mCovered,
+			MutantsTotal:        r.lived + r.killed + r.notViable,
+			MutantsKilled:       r.killed,
+			MutantsLived:        r.lived,
+			MutantsNotViable:    r.notViable,
+			MutantsNotCovered:   r.notCovered,
+			ElapsedTime:         r.elapsed.Duration().Seconds(),
+			MutatorStatistics:   r.mutatorStatistics,
+			AttributionComplete: r.attributionComplete,
+			DisableBail:         r.disableBail,
+			Tests:               r.tests,
+			Files:               files,
 		}
 
 		jsonResult, _ := json.Marshal(result)
