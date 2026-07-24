@@ -142,7 +142,15 @@ func (cd *CachedDealer) copyTo(dstDir string) func(srcPath string, info fs.FileI
 func copyPath(srcPath, dstPath string, info fs.FileInfo) error {
 	switch mode := info.Mode(); {
 	case mode.IsDir():
-		if err := os.Mkdir(dstPath, mode); err != nil && !os.IsExist(err) {
+		// Create copied directories writable+traversable by the owner even when
+		// the source directory is read-only, so their children (files and
+		// sub-directories) can be written into the ephemeral mutation workspace.
+		// A read-only source dir - e.g. a tool-generated artifacts directory in
+		// the module root - otherwise fails the copy with "permission denied" on
+		// the first nested create. Exact permission bits need not be preserved
+		// for the throwaway workspace, and the workspace must stay writable
+		// because mutations are applied to the copied files.
+		if err := os.Mkdir(dstPath, mode|0o700); err != nil && !os.IsExist(err) {
 			return err
 		}
 	case mode.IsRegular():

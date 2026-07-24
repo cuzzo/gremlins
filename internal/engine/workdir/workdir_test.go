@@ -87,6 +87,37 @@ func checkForDifferentFile(t *testing.T, srcDir string, dstDir string) func(path
 	}
 }
 
+func TestCopyReadOnlySourceDir(t *testing.T) {
+	// A read-only source directory containing files (as produced by some
+	// tools in a module root) must still be copyable: the workspace copy needs
+	// to be writable to receive the children. Regression for a "permission
+	// denied" crash on the first nested create.
+	srcDir := t.TempDir()
+	roDir := filepath.Join(srcDir, "readonly")
+	if err := os.Mkdir(roDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roDir, "child.txt"), getFileBytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(roDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(roDir, 0700) })
+
+	wdDir := t.TempDir()
+	dealer := workdir.NewCachedDealer(wdDir, srcDir)
+	defer dealer.Clean()
+
+	dstDir, err := dealer.Get("worker")
+	if err != nil {
+		t.Fatalf("Get() with a read-only source dir returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "readonly", "child.txt")); err != nil {
+		t.Errorf("expected child file to be copied under the read-only dir: %v", err)
+	}
+}
+
 func TestCachesFolder(t *testing.T) {
 	t.Run("caches copy folders", func(t *testing.T) {
 		srcDir := t.TempDir()
