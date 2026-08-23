@@ -21,9 +21,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -70,6 +73,7 @@ type MutantExecutorDealer struct {
 	testCPU            int
 	attribution        *attributionStore
 	testInventory      map[string]struct{}
+	baselineFailures   map[string]struct{}
 }
 
 // ExecutorDealerOption is the defining option for the initialisation of a ExecutorDealer.
@@ -161,6 +165,7 @@ func (m MutantExecutorDealer) NewExecutor(mut mutator.Mutator, outCh chan<- muta
 		testExecutionTime:  m.testExecutionTime,
 		attribution:        m.attribution,
 		testInventory:      m.testInventory,
+		baselineFailures:   m.baselineFailures,
 	}
 
 	return &mj
@@ -184,6 +189,7 @@ type mutantExecutor struct {
 	testCPU            int
 	attribution        *attributionStore
 	testInventory      map[string]struct{}
+	baselineFailures   map[string]struct{}
 }
 
 // Attribution returns a detached snapshot of the test evidence captured during the run.
@@ -212,7 +218,75 @@ func (m *MutantExecutorDealer) PrepareAttribution(ctx context.Context) error {
 
 	m.testInventory = parseGoTestInventory(output.Bytes())
 
+	return m.prepareBaseline(ctx)
+}
+
+// prepareBaseline records the tests that fail with no mutation applied.
+//
+// Mutation testing reads a failing test as proof that the mutation was
+// noticed, so the claim only holds if the test passed before the mutation.
+// The coverage run establishes that, but it runs in the module root, and every
+// trial runs in a copy of the module handed out per worker. A test whose
+// result depends on where it runs -- one reaching outside its module for a
+// fixture, say -- therefore passes the check and fails every trial, and is
+// recorded as the killer of every mutant it runs beside. The run then reports
+// no survivors, because the survivors are hidden behind it.
+//
+// So the baseline has to be taken where the trials happen. Whatever fails here
+// fails for its own reasons, and its failures are not evidence about any
+// mutant.
+func (m *MutantExecutorDealer) prepareBaseline(ctx context.Context) error {
+	rootDir, err := m.wdDealer.Get("baseline")
+	if err != nil {
+		return fmt.Errorf("baseline workspace: %w", err)
+	}
+
+	cmd := m.execContext(ctx, "go", m.getBaselineArgs()...)
+	cmd.Dir = filepath.Join(rootDir, m.mod.CallingDir)
+	cmd.Env = append(cmd.Env, os.Environ()...)
+	cmd.Env = append(cmd.Env, fmt.Sprintf("GOTMPDIR=%s", m.wdDealer.WorkDir()))
+
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	setupProcessGroup(cmd)
+	// A non-zero exit is the case this exists to describe, so only the parsed
+	// output decides. A build failure leaves no test results and no baseline.
+	_ = run(ctx, cmd)
+
+	facts := parseGoTestRun(output.Bytes())
+	if facts.failedBuild {
+		return nil
+	}
+
+	m.baselineFailures = make(map[string]struct{}, len(facts.failed))
+	for _, test := range facts.failed {
+		m.baselineFailures[test] = struct{}{}
+	}
+	if len(m.baselineFailures) > 0 {
+		log.Errorf(
+			"%d test(s) fail without any mutation applied and cannot kill a mutant: %s\n",
+			len(m.baselineFailures),
+			strings.Join(slices.Sorted(maps.Keys(m.baselineFailures)), ", "),
+		)
+	}
+
 	return nil
+}
+
+func (m *MutantExecutorDealer) getBaselineArgs() []string {
+	args := []string{goTestSubcommand}
+	if m.buildTags != "" {
+		args = append(args, "-tags", m.buildTags)
+	}
+	args = append(args, "-timeout", (2*time.Second + m.testExecutionTime).String())
+	args = append(args, "-json")
+	if m.testCPU != 0 {
+		args = append(args, "-cpu", fmt.Sprintf("%d", m.testCPU))
+	}
+	args = append(args, allPackagesPattern)
+
+	return args
 }
 
 // Start is the implementation of the workerpool.Executor definition and is the
@@ -281,8 +355,10 @@ func (m *mutantExecutor) runTests(rootDir, pkg string) mutator.Status {
 
 	err := run(ctx, cmd)
 	var facts goTestRun
+	killers := []string(nil)
 	if m.collectAttribution {
 		facts = parseGoTestRun(output.Bytes())
+		killers = withoutBaselineFailures(facts.failed, m.baselineFailures)
 		testsCompleted, complete := testRunProgress(
 			m.testInventory,
 			facts.completed,
@@ -291,7 +367,7 @@ func (m *mutantExecutor) runTests(rootDir, pkg string) mutator.Status {
 		)
 		m.attribution.record(
 			m.mutant,
-			facts.failed,
+			killers,
 			testsCompleted,
 			complete,
 		)
@@ -305,10 +381,38 @@ func (m *mutantExecutor) runTests(rootDir, pkg string) mutator.Status {
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return getTestFailedStatus(exitErr.ExitCode())
+		status := getTestFailedStatus(exitErr.ExitCode())
+		// The suite failed, but if every test that failed was already failing
+		// without a mutation then nothing here noticed this one, and a mutant
+		// nothing noticed lived.
+		if status == mutator.Killed && len(facts.failed) > 0 && len(killers) == 0 {
+			return mutator.Lived
+		}
+
+		return status
 	}
 
 	return mutator.Lived
+}
+
+// withoutBaselineFailures drops the tests that were already failing.
+//
+// Attribution is only collected when the whole suite is allowed to finish, so
+// the failures reported here are the complete set, and what remains after the
+// baseline is removed is the set of tests that this mutation broke.
+func withoutBaselineFailures(failed []string, baseline map[string]struct{}) []string {
+	if len(baseline) == 0 {
+		return failed
+	}
+	killers := make([]string, 0, len(failed))
+	for _, test := range failed {
+		if _, alreadyFailing := baseline[test]; alreadyFailing {
+			continue
+		}
+		killers = append(killers, test)
+	}
+
+	return killers
 }
 
 func (m *MutantExecutorDealer) getTestInventoryArgs() []string {

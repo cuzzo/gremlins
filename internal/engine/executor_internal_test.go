@@ -363,3 +363,49 @@ func TestTestRunCompleted(t *testing.T) {
 		t.Errorf("absent package progress = (%d, %t), want (0, false)", completed, complete)
 	}
 }
+
+// A test that fails with no mutation applied is not evidence about a mutant.
+//
+// The whole run reported perfect efficacy because one such test was recorded
+// as the killer of every mutant it ran beside: it reached outside its module
+// for a fixture, so it passed where the coverage run happens and failed in the
+// copy each trial runs in.
+func TestATestFailingWithoutAMutationCannotKillOne(t *testing.T) {
+	const alreadyFailing = testAlphaID
+	const noticedTheMutation = testBetaID
+
+	testCases := map[string]struct {
+		failed   []string
+		baseline map[string]struct{}
+		want     []string
+	}{
+		"no baseline leaves the failures alone": {
+			failed: []string{alreadyFailing, noticedTheMutation},
+			want:   []string{alreadyFailing, noticedTheMutation},
+		},
+		"a test failing at baseline is not a killer": {
+			failed:   []string{alreadyFailing, noticedTheMutation},
+			baseline: map[string]struct{}{alreadyFailing: {}},
+			want:     []string{noticedTheMutation},
+		},
+		"nothing noticed the mutation": {
+			failed:   []string{alreadyFailing},
+			baseline: map[string]struct{}{alreadyFailing: {}},
+			want:     []string{},
+		},
+		"a passing baseline test still kills": {
+			failed:   []string{noticedTheMutation},
+			baseline: map[string]struct{}{alreadyFailing: {}},
+			want:     []string{noticedTheMutation},
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			got := withoutBaselineFailures(tc.failed, tc.baseline)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("killers mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
