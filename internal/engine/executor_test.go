@@ -119,6 +119,45 @@ func TestApplyAndRollback(t *testing.T) {
 	})
 }
 
+// A mutant that could not be applied must still be in the report.
+//
+// Dropping it shrinks the corpus without saying so: the run then describes
+// fewer mutants than the analysis found, and nothing distinguishes "we
+// measured this and it survived" from "we never managed to write it". A full
+// disk did exactly that to thousands of mutants at once.
+func TestAMutantThatCannotBeAppliedIsReportedNotDropped(t *testing.T) {
+	wdDealer := newWdDealerStub(t)
+	tmpDir, _ := wdDealer.Get("")
+	mod := gomodule.GoModule{
+		Name:       "example.com",
+		Root:       tmpDir,
+		CallingDir: ".",
+	}
+	mjd := engine.NewExecutorDealer(mod, wdDealer, expectedTimeout, engine.WithExecContext(fakeExecCommandSuccess))
+	mut := &mutantStub{
+		status:        mutator.Runnable,
+		mutType:       mutator.ConditionalsBoundary,
+		pkg:           "example.com",
+		hasApplyError: true,
+	}
+	outCh := make(chan mutator.Mutator, 1)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	executor := mjd.NewExecutor(mut, outCh, &wg)
+
+	executor.Start(&workerpool.Worker{Name: "test", ID: 1})
+	wg.Wait()
+	close(outCh)
+
+	reported, ok := <-outCh
+	if !ok {
+		t.Fatal("the mutant left the corpus entirely instead of being reported")
+	}
+	if reported.Status() != mutator.Skipped {
+		t.Errorf("status = %v, want %v: an unapplied mutant was not measured", reported.Status(), mutator.Skipped)
+	}
+}
+
 type execContext = func(ctx context.Context, name string, args ...string) *exec.Cmd
 
 func TestMutatorTestExecution(t *testing.T) {

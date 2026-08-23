@@ -319,6 +319,14 @@ func (m *mutantExecutor) Start(w *workerpool.Worker) {
 
 	if err := m.mutant.Apply(); err != nil {
 		log.Errorf("failed to apply mutation at %s - %s\n\t%v", m.mutant.Position(), m.mutant.Status(), err)
+		// Returning here dropped the mutant: it never reached the channel, so
+		// it left the report entirely and the run described a corpus smaller
+		// than the one the analysis found, without saying so. A full disk did
+		// that to thousands of mutants at once. Report it as skipped instead
+		// -- it is in the corpus and was not measured, which is the truth, and
+		// efficacy counts only killed and lived so the rate is unaffected.
+		m.mutant.SetStatus(mutator.Skipped)
+		m.outCh <- m.mutant
 
 		return
 	}
