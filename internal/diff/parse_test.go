@@ -37,7 +37,12 @@ func TestNewWithCmd(t *testing.T) {
 			t.Fatal("cmd not called")
 		}
 
-		expectedArgs := []string{"diff", "--merge-base", "test"}
+		// --relative names the changed files from the module being mutated.
+		// A module inside a larger repository is otherwise described by paths
+		// from the repository root, which match no mutant, so every mutant is
+		// skipped and the run reports a clean zero instead of saying it
+		// selected nothing.
+		expectedArgs := []string{"diff", "--relative", "--merge-base", "test"}
 
 		if m.callName != "git" || !reflect.DeepEqual(m.callArgs, expectedArgs) {
 			t.Log("name", m.callName)

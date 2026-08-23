@@ -30,7 +30,12 @@ func NewWithCmd[T execCmd](cmdContext func(name string, args ...string) T) (Diff
 
 	log.Infoln("Gathering files diff...")
 
-	cmd := cmdContext("git", "diff", "--merge-base", diffRef)
+	// --relative makes git name files from the working directory, which is the
+	// module being mutated. Without it a module inside a larger repository is
+	// described by paths from the repository root, while mutants are named
+	// from the module -- so nothing matches, every mutant is skipped, and the
+	// run reports a clean zero rather than admitting it selected nothing.
+	cmd := cmdContext("git", "diff", "--relative", "--merge-base", diffRef)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
